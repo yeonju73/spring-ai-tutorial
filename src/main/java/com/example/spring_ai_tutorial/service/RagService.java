@@ -2,7 +2,7 @@ package com.example.spring_ai_tutorial.service;
 
 import com.example.spring_ai_tutorial.domain.dto.DocumentSearchResultDto;
 import com.example.spring_ai_tutorial.exception.DocumentProcessingException;
-import com.example.spring_ai_tutorial.repository.InMemoryDocumentVectorStore;
+import com.example.spring_ai_tutorial.repository.QdrantDocumentVectorStore;
 import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.stereotype.Service;
@@ -25,10 +25,10 @@ import java.util.stream.IntStream;
 @Service
 public class RagService {
 
-    private final InMemoryDocumentVectorStore vectorStore;
+    private final QdrantDocumentVectorStore vectorStore;
     private final ChatService chatService;
 
-    public RagService(InMemoryDocumentVectorStore vectorStore, ChatService chatService) {
+    public RagService(QdrantDocumentVectorStore vectorStore, ChatService chatService) {
         this.vectorStore = vectorStore;
         this.chatService = chatService;
     }
@@ -48,7 +48,7 @@ public class RagService {
         docMetadata.put("uploadTime", System.currentTimeMillis());
 
         try {
-            // [Step 3 ~ 5] InMemoryDocumentVectorStore에 위임하여 PDF 텍스트 추출 → 청킹 → 임베딩 → 저장을 순차 처리
+            // [Step 3 ~ 5] QdrantDocumentVectorStore에 위임하여 PDF 텍스트 추출 → 청킹 → 임베딩 → Qdrant 저장을 순차 처리
             vectorStore.addDocumentFile(documentId, file, docMetadata);
             log.info("PDF 문서 업로드 완료. ID: {}", documentId);
             return documentId;
@@ -63,7 +63,7 @@ public class RagService {
      */
     public List<DocumentSearchResultDto> retrieve(String question, int maxResults) {
         log.debug("검색 시작: '{}', 최대 결과 수: {}", question, maxResults);
-        // [질의 Step 3] InMemoryDocumentVectorStore에 위임하여 실제 유사도 계산 및 결과 변환을 수행함
+        // [질의 Step 3] QdrantDocumentVectorStore에 위임하여 실제 유사도 계산 및 결과 변환을 수행함
         return vectorStore.similaritySearch(question, maxResults);
     }
 

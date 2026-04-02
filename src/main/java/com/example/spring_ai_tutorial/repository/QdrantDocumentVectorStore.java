@@ -3,14 +3,10 @@ package com.example.spring_ai_tutorial.repository;
 import com.example.spring_ai_tutorial.domain.dto.DocumentSearchResultDto;
 import com.example.spring_ai_tutorial.exception.DocumentProcessingException;
 import com.example.spring_ai_tutorial.service.DocumentProcessingService;
-import com.example.spring_ai_tutorial.service.EmbeddingService;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.stereotype.Repository;
 
@@ -22,34 +18,34 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * [업로드 Step 4 ~ 5] 텍스트 청킹 후 임베딩하여 인메모리 벡터 스토어에 저장
- * 
+ * [업로드 Step 4 ~ 5] 텍스트 청킹 후 임베딩하여 Qdrant 벡터 스토어에 저장
+ *
  * - Step 4 (청킹): 긴 문서를 그대로(통째로) 임베딩하면 토큰 한도 초과 및 검색 정밀도 저하 문제가 생김
  *   TokenTextSplitter로 512 토큰 단위로 분할해 각 청크가 의미 있는 단위가 되도록 함
- * 
- * - Step 5 (임베딩 + 저장): 각 청크를 OpenAI 임베딩 모델을 통해 벡터화하여 인메모리 벡터스토어에 저장
+ *
+ * - Step 5 (임베딩 + 저장): 각 청크를 OpenAI 임베딩 모델을 통해 벡터화하여 Qdrant 벡터스토어에 저장
  *   이후 사용자의 질의 시 질의에 대한 벡터와 코사인 유사도를 계산하여 관련 청크를 빠르게 찾기 위한 사전 작업
  */
 @Slf4j
 @Repository
-public class InMemoryDocumentVectorStore {
+public class QdrantDocumentVectorStore {
 
     private final DocumentProcessingService documentProcessingService;
     private final VectorStore vectorStore;
 
-    public InMemoryDocumentVectorStore(EmbeddingService embeddingService,
-                                       DocumentProcessingService documentProcessingService) {
+    public QdrantDocumentVectorStore(VectorStore vectorStore,
+                                     DocumentProcessingService documentProcessingService) {
+        this.vectorStore = vectorStore;
         this.documentProcessingService = documentProcessingService;
-        this.vectorStore = SimpleVectorStore.builder(embeddingService.getEmbeddingModel()).build();
     }
 
     /**
-     * [업로드 Step 4] 텍스트를 청킹한 뒤 [Step 5] 임베딩하여 벡터 스토어에 저장
+     * [업로드 Step 4] 텍스트를 청킹한 뒤 [Step 5] 임베딩하여 Qdrant 벡터 스토어에 저장
      */
     public void addDocument(String id, String fileText, Map<String, Object> metadata) {
         log.debug("문서 추가 시작 - ID: {}, 내용 길이: {}", id, fileText.length());
         try {
-            Map<String, Object> combinedMetadata = new HashMap<>(metadata);
+            Map<String, Object> combinedMetadata = sanitizeMetadata(metadata);
             combinedMetadata.put("id", id);
 
             Document document = new Document(fileText, combinedMetadata);
@@ -71,7 +67,7 @@ public class InMemoryDocumentVectorStore {
                         chunks.get(i).getText().length(), chunks.get(i).getText());
             }
 
-            // [Step 5] 임베딩 + 저장: 각 청크를 OpenAI 임베딩 모델로 벡터화하여 인메모리 스토어에 저장함
+            // [Step 5] 임베딩 + 저장: 각 청크를 OpenAI 임베딩 모델로 벡터화하여 Qdrant에 저장함
             // 이후 질의 시 질문 벡터와 코사인 유사도를 계산해 관련 청크를 찾는 데 사용됨
             vectorStore.add(chunks);
             log.info("문서 추가 완료 - ID: {}", id);
@@ -82,7 +78,7 @@ public class InMemoryDocumentVectorStore {
     }
 
     /**
-     * 파일을 처리하여 벡터 스토어에 추가
+     * 파일을 처리하여 Qdrant 벡터 스토어에 추가
      */
     public void addDocumentFile(String id, File file, Map<String, Object> metadata) {
         log.debug("파일 문서 추가 시작 - ID: {}, 파일: {}", id, file.getName());
@@ -102,8 +98,27 @@ public class InMemoryDocumentVectorStore {
     }
 
     /**
+     * Qdrant M6가 허용하는 타입(String, Integer, Double, Boolean)으로 metadata 값을 변환
+     * Long 등 미지원 타입은 String으로 변환
+     */
+    private Map<String, Object> sanitizeMetadata(Map<String, Object> metadata) {
+        Map<String, Object> sanitized = new HashMap<>();
+        for (Map.Entry<String, Object> entry : metadata.entrySet()) {
+            Object value = entry.getValue();
+            if (value instanceof Long) {
+                sanitized.put(entry.getKey(), ((Long) value).toString());
+            } else if (value instanceof Integer || value instanceof Double || value instanceof Boolean || value instanceof String) {
+                sanitized.put(entry.getKey(), value);
+            } else if (value != null) {
+                sanitized.put(entry.getKey(), value.toString());
+            }
+        }
+        return sanitized;
+    }
+
+    /**
      * [질의 Step 3] 질문 벡터와 저장된 청크 벡터들의 코사인 유사도를 계산하여 관련 청크를 반환
-     * 
+     *
      * 검색 결과 Document를 DocumentSearchResultDto로 변환하며, 출처 메타데이터(파일명 등)도 함께 전달함
      */
     public List<DocumentSearchResultDto> similaritySearch(String query, int maxResults) {
